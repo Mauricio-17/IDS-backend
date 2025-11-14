@@ -9,6 +9,8 @@ import Device
 from motor.motor_asyncio import AsyncIOMotorClient
 import bcrypt
 import uuid
+import pymongo
+from pymongo import MongoClient
 
 app = FastAPI()
 
@@ -24,25 +26,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = AsyncIOMotorClient("mongodb://localhost:27017")
-db = client["network_monitor"]
-users_collection = db["User"]
-devices_collection = db["Device"]
+uri = "mongodb://localhost:27017"
+py_client = MongoClient(uri)
+database = py_client["network_monitor"]
+users_collection = database["User"]
+devices_collection = database["Device"]
+event_collection = database["Event"]
 
 
 @app.get("/numbers/{count}", response_model=List[int])
 def get_numbers(count: int):
     return list(range(count))
 
-@app.get("/logs", response_model=List[dict])
+@app.get("/logs", response_model=List)
 def get_numbers():
     arr = functions.Parser()
-    return arr.process()
+    result = arr.process()
+    for i in result:
+        existing_event = event_collection.find_one({"flow_id": i["Flow id"]})
+        if existing_event:
+            continue
+        
+        existing_device = devices_collection.find_one({"ip_address": i["src ip"]})
+        if existing_device:
+            existing_user = users_collection.find_one({"id": existing_device["user_id"]})
+            if existing_user:
+                i["origin_device"] = existing_user["fullname"]
+        event_collection.insert_one(i)
+    
+    event_list = []
+    events = list(event_collection.find({}))
+    for i in events:
+        del i["_id"]
+        event_list.append(i)
+    sort = sorted(event_list, key=lambda x: x["timestamp"], reverse=True)
+    return sort
 
 @app.post("/save-user", response_model=User.UserOut)
-async def save_ser(user: User.UserCreate):
+def save_user(user: User.UserCreate):
     # Check if username exists
-    existing_user = await users_collection.find_one({"username": user.username})
+    existing_user = users_collection.find_one({"username": user.username})
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
 
@@ -53,28 +76,33 @@ async def save_ser(user: User.UserCreate):
     user_id = str(uuid.uuid4())
     new_user = {
         "id": user_id,
-        "full_name": user.full_name,
+        "fullname": user.fullname,
         "area": user.area,
         "username": user.username,
         "password": hashed_pw.decode("utf-8")
     }
 
-    await users_collection.insert_one(new_user)
+    users_collection.insert_one(new_user)
 
     # Return without password
     return {
         "id": user_id,
-        "full_name": user.full_name,
+        "fullname": user.fullname,
         "area": user.area,
         "username": user.username
     }
     
 @app.post("/save-device", response_model=Device.DeviceOut)
-async def save_ser(device: Device.DeviceCreate):
+def save_device(device: Device.DeviceCreate):
     # Check if username exists
-    existing_device = await devices_collection.find_one({"ip_address": device.ip_address})
+    
+    existing_user= users_collection.find_one({"id": device.user_id})
+    if existing_user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    existing_device = devices_collection.find_one({"ip_address": device.ip_address})
     if existing_device:
-        raise HTTPException(status_code=400, detail="Username already exists")
+        raise HTTPException(status_code=400, detail="IP address already exists")
     
     # Create new user document
     device_id = str(uuid.uuid4())
@@ -87,7 +115,7 @@ async def save_ser(device: Device.DeviceCreate):
         "storage": device.storage
     }
     
-    await devices_collection.insert_one(new_device)
+    devices_collection.insert_one(new_device)
     
     return {
         "id": device_id,
@@ -100,23 +128,59 @@ async def save_ser(device: Device.DeviceCreate):
     
     
 @app.post("/sign-in", response_model=User.UserOut)
-async def sign_in(auth: User.Auth):
+def sign_in(auth: User.Auth):
     # Check if username exists
-    existing_user = await users_collection.find_one({"username": auth.username})
-    print(existing_user["username"])    
+    existing_user = users_collection.find_one({"username": auth.username})
     
     if existing_user is None:
         raise HTTPException(status_code=404, detail="User not found")
     
-
     stored_password = str(existing_user["password"])
     stored_password = stored_password.encode("utf-8")
     print(stored_password)
     if bcrypt.checkpw(auth.password.encode("utf-8"), stored_password):
         return {
             "id": existing_user["id"],
-            "full_name": existing_user["full_name"],
+            "fullname": existing_user["fullname"],
             "area": existing_user["area"],
             "username": existing_user["username"]
         }
+
+@app.get("/get-users", response_model=List[User.UserOut])
+def get_users():
     
+    result = []
+    users = list(users_collection.find({}))
+    if len(users) == 0:
+        raise HTTPException(status_code=404, detail="Users not found") 
+    for item in users:
+        data = {
+            "id": item["id"],
+            "fullname": item["fullname"],
+            "area": item["area"],
+            "username": item["username"]
+        }
+        result.append(data)
+    
+    return result
+
+@app.get("/get-devices", response_model=List[Device.DeviceOut])
+def get_devices():
+    
+    result = []
+    devices = list(devices_collection.find({}))
+    if len(devices) == 0:
+        raise HTTPException(status_code=404, detail="Devices not found") 
+    for item in devices:
+        data = {
+            "id": item["id"],
+            "user_id": item["user_id"],
+            "cpu_name": item["cpu_name"],
+            "ram_storage": item["ram_storage"],
+            "ip_address": item["ip_address"],
+            "storage": item["storage"]
+        }
+        result.append(data)
+    
+    return result
+

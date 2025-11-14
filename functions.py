@@ -36,7 +36,7 @@ class Parser:
             return None
 
     def process(self):
-        self.logs = self.retrieve_logs(600)
+        self.logs = self.retrieve_logs(100)
         filtered = self.group.filter(lambda g: (g["event_type"].isin(["flow", "alert"])).any())
         
         self.group = filtered.groupby("flow_id")
