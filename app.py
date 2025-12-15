@@ -6,11 +6,14 @@ from fastapi.middleware.cors import CORSMiddleware
 import functions
 import User
 import Device
+import BlackList
 from motor.motor_asyncio import AsyncIOMotorClient
 import bcrypt
 import uuid
 import pymongo
 from pymongo import MongoClient
+
+import utils
 
 app = FastAPI()
 
@@ -32,11 +35,30 @@ database = py_client["network_monitor"]
 users_collection = database["User"]
 devices_collection = database["Device"]
 event_collection = database["Event"]
+blacklist_collection = database["BlackList"]
 
 
 @app.get("/numbers/{count}", response_model=List[int])
 def get_numbers(count: int):
     return list(range(count))
+
+@app.get("/get-list", response_model=List[BlackList.BlackListOut])
+def get_list():
+    result = []
+    black_list = list(blacklist_collection.find({}))
+    if len(black_list) == 0:
+        raise HTTPException(status_code=404, detail="No black list found") 
+    
+    for item in black_list:
+        data = {
+            "timestamp": item["creation_date"],
+            "ip_address": item["ip_address"],
+            "label": item["label"]
+        }
+        result.append(data)
+    
+    return result
+    
 
 @app.get("/logs", response_model=List)
 def get_numbers():
@@ -52,6 +74,17 @@ def get_numbers():
             existing_user = users_collection.find_one({"id": existing_device["user_id"]})
             if existing_user:
                 i["origin_device"] = existing_user["fullname"]
+        
+        existing_banned = blacklist_collection.find_one({"ip_address": i["dst ip"]})
+        
+        if existing_banned == None and i["Label"] != "BENIGN":
+            banned = {
+                "ip_address": i["dst ip"],
+                "label": i["Label"],
+                "creation_date": i["timestamp"]
+            }
+            blacklist_collection.insert_one(banned)
+  
         event_collection.insert_one(i)
     
     event_list = []
@@ -65,9 +98,12 @@ def get_numbers():
 @app.post("/save-user", response_model=User.UserOut)
 def save_user(user: User.UserCreate):
     # Check if username exists
+    if not utils.is_valid_password(user.password):
+        raise HTTPException(status_code=400, detail="La contraseña no cumple con al menos 8 dígitos")
+    
     existing_user = users_collection.find_one({"username": user.username})
     if existing_user:
-        raise HTTPException(status_code=400, detail="Username already exists")
+        raise HTTPException(status_code=404, detail="User already exists")
 
     # Hash password
     hashed_pw = bcrypt.hashpw(user.password.encode("utf-8"), bcrypt.gensalt())

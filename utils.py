@@ -1,4 +1,5 @@
 import json
+import re
 
 def extract_features_from_suricata(eve_event):
     # Basic features similar to NSL-KDD
@@ -12,3 +13,23 @@ def extract_features_from_suricata(eve_event):
         'dst_bytes': eve_event.get('flow', {}).get('bytes_toclient', 0)
     }
     return features
+
+
+
+def is_valid_password(password: str) -> bool:
+    """
+    Validates a password that must contain:
+      - at least one uppercase letter
+      - at least one number
+      - at least 8 characters in total
+    """
+    pattern = r'^(?=.*[A-Z])(?=.*\d).{9,}$'
+    return bool(re.match(pattern, password))
+
+"""
+# Example usage:
+passwords = ["hello", "Hello", "Hello1", "Hello123", "TestPass1"]
+
+for pwd in passwords:
+    print(pwd, "->", is_valid_password(pwd))
+"""
